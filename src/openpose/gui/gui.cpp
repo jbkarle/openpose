@@ -7,8 +7,6 @@
 
 namespace op
 {
-    const std::string OPEN_POSE_TEXT{"OpenPose 1.2.0"};
-
     inline void showGuiHelp()
     {
         try
@@ -18,7 +16,8 @@ namespace op
             if (!helpCvMat.empty())
             {
                 const auto fullScreen = false;
-                FrameDisplayer frameDisplayer{OPEN_POSE_TEXT + " - GUI Help", Point<int>{helpCvMat.cols, helpCvMat.rows}, fullScreen};
+                FrameDisplayer frameDisplayer{OPEN_POSE_NAME_AND_VERSION + " - GUI Help",
+                                              Point<int>{helpCvMat.cols, helpCvMat.rows}, fullScreen};
                 frameDisplayer.displayFrame(helpCvMat, 33);
             }
         }
@@ -28,9 +27,11 @@ namespace op
         }
     }
 
-    void handleWaitKey(bool& guiPaused, FrameDisplayer& frameDisplayer, std::vector<std::shared_ptr<PoseExtractor>>& poseExtractors,
-                       std::vector<std::shared_ptr<Renderer>>& renderers, std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
-                       std::shared_ptr<std::pair<std::atomic<bool>, std::atomic<int>>>& spVideoSeek)
+    void handleWaitKey(bool& guiPaused, FrameDisplayer& frameDisplayer,
+                       std::vector<std::shared_ptr<PoseExtractor>>& poseExtractors,
+                       std::vector<std::shared_ptr<Renderer>>& renderers,
+                       std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
+                       std::shared_ptr<std::pair<std::atomic<bool>, std::atomic<int>>>& videoSeekSharedPtr)
     {
         try
         {
@@ -54,7 +55,7 @@ namespace op
                     showGuiHelp();
                 // Switch full screen - normal screen
                 else if (castedKey=='f')
-                    frameDisplayer.switchGuiDisplayMode();
+                    frameDisplayer.switchFullScreenMode();
                 // ------------------------- Producer-Related ------------------------- //
                 // Pause
                 else if (castedKey==' ')
@@ -62,20 +63,20 @@ namespace op
                 // Fake pause
                 else if (castedKey=='m')
                 {
-                    if (spVideoSeek != nullptr)
-                        spVideoSeek->first = !spVideoSeek->first;
+                    if (videoSeekSharedPtr != nullptr)
+                        videoSeekSharedPtr->first = !videoSeekSharedPtr->first;
                 }
                 // Seeking in video
                 else if (castedKey=='l' || castedKey=='k')
                 {
-                    if (spVideoSeek != nullptr)
+                    if (videoSeekSharedPtr != nullptr)
                     {
                         // Normal case, +-30 frames
-                        if (!spVideoSeek->first)
-                            spVideoSeek->second += 30 * (castedKey=='l' ? -2 : 1);
+                        if (!videoSeekSharedPtr->first)
+                            videoSeekSharedPtr->second += 30 * (castedKey=='k' ? -2 : 1);
                         // Frame by frame (if forced paused)
                         else
-                            spVideoSeek->second += (castedKey=='l' ? -1 : 1);
+                            videoSeekSharedPtr->second += (castedKey=='k' ? -1 : 1);
                     }
                 }
                 // Enable/disable blending
@@ -91,13 +92,16 @@ namespace op
                         poseExtractor->increase(PoseProperty::NMSThreshold, 0.005f * (castedKey=='-' ? -1 : 1));
                 else if (castedKey=='_' || castedKey=='+')
                     for (auto& poseExtractor : poseExtractors)
-                        poseExtractor->increase(PoseProperty::ConnectMinSubsetScore, 0.005f * (castedKey=='_' ? -1 : 1));
+                        poseExtractor->increase(PoseProperty::ConnectMinSubsetScore,
+                                                0.005f * (castedKey=='_' ? -1 : 1));
                 else if (castedKey=='[' || castedKey==']')
                     for (auto& poseExtractor : poseExtractors)
-                        poseExtractor->increase(PoseProperty::ConnectInterThreshold, 0.005f * (castedKey=='[' ? -1 : 1));
+                        poseExtractor->increase(PoseProperty::ConnectInterThreshold,
+                                                0.005f * (castedKey=='[' ? -1 : 1));
                 else if (castedKey=='{' || castedKey=='}')
                     for (auto& poseExtractor : poseExtractors)
-                        poseExtractor->increase(PoseProperty::ConnectInterMinAboveThreshold, (castedKey=='{' ? -0.1f : 0.1f));
+                        poseExtractor->increase(PoseProperty::ConnectInterMinAboveThreshold,
+                                                (castedKey=='{' ? -0.1f : 0.1f));
                 else if (castedKey==';' || castedKey=='\'')
                     for (auto& poseExtractor : poseExtractors)
                         poseExtractor->increase(PoseProperty::ConnectMinSubsetCnt, (castedKey==';' ? -1 : 1));
@@ -130,18 +134,19 @@ namespace op
     }
 
     void handleUserInput(FrameDisplayer& frameDisplayer, std::vector<std::shared_ptr<PoseExtractor>>& poseExtractors,
-                         std::vector<std::shared_ptr<Renderer>>& renderers, std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
-                         std::shared_ptr<std::pair<std::atomic<bool>, std::atomic<int>>>& spVideoSeek)
+                         std::vector<std::shared_ptr<Renderer>>& renderers,
+                         std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
+                         std::shared_ptr<std::pair<std::atomic<bool>, std::atomic<int>>>& videoSeekSharedPtr)
     {
         try
         {
             // The handleUserInput must be always performed, even if no tDatum is detected
             bool guiPaused = false;
-            handleWaitKey(guiPaused, frameDisplayer, poseExtractors, renderers, isRunningSharedPtr, spVideoSeek);
+            handleWaitKey(guiPaused, frameDisplayer, poseExtractors, renderers, isRunningSharedPtr, videoSeekSharedPtr);
             while (guiPaused)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                handleWaitKey(guiPaused, frameDisplayer, poseExtractors, renderers, isRunningSharedPtr, spVideoSeek);
+                handleWaitKey(guiPaused, frameDisplayer, poseExtractors, renderers, isRunningSharedPtr, videoSeekSharedPtr);
             }
         }
         catch (const std::exception& e)
@@ -150,13 +155,15 @@ namespace op
         }
     }
 
-    Gui::Gui(const Point<int>& outputSize, const bool fullScreen, const std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
+    Gui::Gui(const Point<int>& outputSize, const bool fullScreen,
+             const std::shared_ptr<std::atomic<bool>>& isRunningSharedPtr,
              const std::shared_ptr<std::pair<std::atomic<bool>, std::atomic<int>>>& videoSeekSharedPtr,
-             const std::vector<std::shared_ptr<PoseExtractor>>& poseExtractors, const std::vector<std::shared_ptr<Renderer>>& renderers) :
-        mFrameDisplayer{OPEN_POSE_TEXT, outputSize, fullScreen},
+             const std::vector<std::shared_ptr<PoseExtractor>>& poseExtractors,
+             const std::vector<std::shared_ptr<Renderer>>& renderers) :
+        spIsRunning{isRunningSharedPtr},
+        mFrameDisplayer{OPEN_POSE_NAME_AND_VERSION, outputSize, fullScreen},
         mPoseExtractors{poseExtractors},
         mRenderers{renderers},
-        spIsRunning{isRunningSharedPtr},
         spVideoSeek{videoSeekSharedPtr}
     {
     }
@@ -166,17 +173,47 @@ namespace op
         mFrameDisplayer.initializationOnThread();
     }
 
-    void Gui::update(const cv::Mat& cvOutputData)
+    void Gui::setImage(const cv::Mat& cvMatOutput)
+    {
+        try
+        {
+            setImage(std::vector<cv::Mat>{cvMatOutput});
+        }
+        catch (const std::exception& e)
+        {
+            error(e.what(), __LINE__, __FUNCTION__, __FILE__);
+        }
+    }
+
+    void Gui::setImage(const std::vector<cv::Mat>& cvMatOutputs)
     {
         try
         {
             // Check tDatum integrity
-            const bool returnedIsValidFrame = ((spIsRunning == nullptr || *spIsRunning) && !cvOutputData.empty());
+            bool returnedIsValidFrame = ((spIsRunning == nullptr || *spIsRunning) && !cvMatOutputs.empty());
+            for (const auto& cvMatOutput : cvMatOutputs)
+            {
+                if (cvMatOutput.empty())
+                {
+                    returnedIsValidFrame = false;
+                    break;
+                }
+            }
 
             // Display
             if (returnedIsValidFrame)
-                mFrameDisplayer.displayFrame(cvOutputData, -1);
+                mFrameDisplayer.displayFrame(cvMatOutputs, -1);
+        }
+        catch (const std::exception& e)
+        {
+            error(e.what(), __LINE__, __FUNCTION__, __FILE__);
+        }
+    }
 
+    void Gui::update()
+    {
+        try
+        {
             // Handle user input
             handleUserInput(mFrameDisplayer, mPoseExtractors, mRenderers, spIsRunning, spVideoSeek);
         }

@@ -259,17 +259,19 @@ namespace op
 
 
 // Implementation
+#include <openpose/3d/headers.hpp>
 #include <openpose/core/headers.hpp>
+#include <openpose/experimental/tracking/headers.hpp>
 #include <openpose/face/headers.hpp>
 #include <openpose/filestream/headers.hpp>
 #include <openpose/gui/headers.hpp>
+#include <openpose/gpu/gpu.hpp>
 #include <openpose/hand/headers.hpp>
 #include <openpose/pose/headers.hpp>
 #include <openpose/producer/headers.hpp>
-#include <openpose/experimental/tracking/headers.hpp>
-#include <openpose/utilities/cuda.hpp>
 #include <openpose/utilities/fileSystem.hpp>
 #include <openpose/utilities/standard.hpp>
+#include <openpose/wrapper/wrapperAuxiliary.hpp>
 namespace op
 {
     template<typename TDatums, typename TWorker, typename TQueue>
@@ -447,114 +449,55 @@ namespace op
             const auto renderHandGpu = wrapperStructHand.enable && wrapperStructHand.renderMode == RenderMode::Gpu;
 
             // Check no wrong/contradictory flags enabled
-            if (wrapperStructPose.alphaKeypoint < 0. || wrapperStructPose.alphaKeypoint > 1.
-                || wrapperStructFace.alphaHeatMap < 0. || wrapperStructFace.alphaHeatMap > 1.
-                || wrapperStructHand.alphaHeatMap < 0. || wrapperStructHand.alphaHeatMap > 1.)
-                error("Alpha value for blending must be in the range [0,1].", __LINE__, __FUNCTION__, __FILE__);
-            if (wrapperStructPose.scaleGap <= 0.f && wrapperStructPose.scalesNumber > 1)
-                error("The scale gap must be greater than 0 (it has no effect if the number of scales is 1).",
-                      __LINE__, __FUNCTION__, __FILE__);
-            if (!renderOutput && (!wrapperStructOutput.writeImages.empty() || !wrapperStructOutput.writeVideo.empty()))
-            {
-                const auto message = "In order to save the rendered frames (`write_images` or `write_video`), you"
-                                     " cannot disable `render_pose`.";
-                log(message, Priority::High);
-            }
-            if (!wrapperStructOutput.writeHeatMaps.empty() && wrapperStructPose.heatMapTypes.empty())
-            {
-                const auto message = "In order to save the heatmaps (`write_heatmaps`), you need to pick which heat"
-                                     " maps you want to save: `heatmaps_add_X` flags or fill the"
-                                     " wrapperStructPose.heatMapTypes.";
-                error(message, __LINE__, __FUNCTION__, __FILE__);
-            }
-            if (!wrapperStructOutput.writeHeatMaps.empty()
-                && (wrapperStructPose.heatMapScale != ScaleMode::UnsignedChar &&
-                        wrapperStructOutput.writeHeatMapsFormat != "float"))
-            {
-                const auto message = "In order to save the heatmaps, you must either set"
-                                     " wrapperStructPose.heatMapScale to ScaleMode::UnsignedChar (i.e. range [0, 255])"
-                                     " or `write_heatmaps_format` to `float` to storage floating numbers in binary"
-                                     " mode.";
-                error(message, __LINE__, __FUNCTION__, __FILE__);
-            }
-            if (mUserOutputWs.empty() && mThreadManagerMode != ThreadManagerMode::Asynchronous
-                && mThreadManagerMode != ThreadManagerMode::AsynchronousOut)
-            {
-                const std::string additionalMessage{
-                    " You could also set mThreadManagerMode = mThreadManagerMode::Asynchronous(Out) and/or add your"
-                    " own output worker class before calling this function."
-                };
-                const auto savingSomething = (
-                    !wrapperStructOutput.writeImages.empty() || !wrapperStructOutput.writeVideo.empty()
-                        || !wrapperStructOutput.writeKeypoint.empty() || !wrapperStructOutput.writeKeypointJson.empty()
-                        || !wrapperStructOutput.writeCocoJson.empty() || !wrapperStructOutput.writeHeatMaps.empty()
-                );
-                if (!wrapperStructOutput.displayGui && !savingSomething)
-                {
-                    const auto message = "No output is selected (`no_display`) and no results are generated (no"
-                                         " `write_X` flags enabled). Thus, no output would be generated."
-                                         + additionalMessage;
-                    error(message, __LINE__, __FUNCTION__, __FILE__);
-                }
-                if (wrapperStructInput.framesRepeat && savingSomething)
-                {
-                    const auto message = "Frames repetition (`frames_repeat`) is enabled as well as some writing"
-                                         " function (`write_X`). This program would never stop recording the same"
-                                         " frames over and over. Please, disable repetition or remove writing.";
-                    error(message, __LINE__, __FUNCTION__, __FILE__);
-                }
-                // Warnings
-                if ((wrapperStructOutput.displayGui && wrapperStructOutput.guiVerbose) && !renderOutput)
-                {
-                    const auto message = "No render is enabled (e.g. `render_pose 0`), so you might also want to"
-                                         " remove the display (set `no_display` or `no_gui_verbose`). If you simply"
-                                         " want to use OpenPose to record video/images without keypoints, you only"
-                                         " need to set `num_gpu 0`." + additionalMessage;
-                    log(message, Priority::High);
-                }
-                if (wrapperStructInput.realTimeProcessing && savingSomething)
-                {
-                    const auto message = "Real time processing is enabled as well as some writing function. Thus, some"
-                                         " frames might be skipped. Consider disabling real time processing if you"
-                                         " intend to save any results.";
-                    log(message, Priority::High);
-                }
-            }
-            if (!wrapperStructOutput.writeVideo.empty() && wrapperStructInput.producerSharedPtr == nullptr)
-                error("Writting video is only available if the OpenPose producer is used (i.e."
-                      " wrapperStructInput.producerSharedPtr cannot be a nullptr).", __LINE__, __FUNCTION__, __FILE__);
-            if (!wrapperStructPose.enable)
-            {
-                if (!wrapperStructFace.enable)
-                    error("Body keypoint detection must be enabled.", __LINE__, __FUNCTION__, __FILE__);
-                if (wrapperStructHand.enable)
-                    error("Body keypoint detection must be enabled in order to run hand keypoint detection.",
-                          __LINE__, __FUNCTION__, __FILE__);
-            }
+            const auto userOutputWsEmpty = mUserOutputWs.empty();
+            wrapperConfigureSecurityChecks(wrapperStructPose, wrapperStructFace, wrapperStructHand, wrapperStructInput,
+                                           wrapperStructOutput, renderOutput, userOutputWsEmpty, mThreadManagerMode);
 
-            // Get number GPUs
-            auto gpuNumber = wrapperStructPose.gpuNumber;
-            const auto gpuNumberStart = wrapperStructPose.gpuNumberStart;
-            // If number GPU < 0 --> set it to all the available GPUs
-            if (gpuNumber < 0)
+            // Get number threads
+            auto numberThreads = wrapperStructPose.gpuNumber;
+            auto gpuNumberStart = wrapperStructPose.gpuNumberStart;
+            // CPU --> 1 thread or no pose extraction
+            if (getGpuMode() == GpuMode::NoGpu)
+            {
+                numberThreads = (wrapperStructPose.gpuNumber == 0 ? 0 : 1);
+                gpuNumberStart = 0;
+                // Disabling multi-thread makes the code 400 ms faster (2.3 sec vs. 2.7 in i7-6850K)
+                // and fixes the bug that the screen was not properly displayed and only refreshed sometimes
+                // Note: The screen bug could be also fixed by using waitKey(30) rather than waitKey(1)
+                disableMultiThreading();
+            }
+            // GPU --> user picks (<= #GPUs)
+            else
             {
                 // Get total number GPUs
                 const auto totalGpuNumber = getGpuNumber();
-                if (totalGpuNumber <= gpuNumberStart)
-                    error("Number of initial GPUs (`number_gpu_start`) must be lower than the total number of used"
-                          " GPUs (`number_gpu`)", __LINE__, __FUNCTION__, __FILE__);
-                gpuNumber = totalGpuNumber - gpuNumberStart;
-                // Reset initial GPU to 0 (we want them all)
-                // Logging message
-                log("Auto-detecting all available GPUs... Detected " + std::to_string(totalGpuNumber)
-                    + " GPU(s), using " + std::to_string(gpuNumber) + " of them starting at GPU "
-                    + std::to_string(gpuNumberStart) + ".", Priority::High);
+                // If number GPU < 0 --> set it to all the available GPUs
+                if (numberThreads < 0)
+                {
+                    if (totalGpuNumber <= gpuNumberStart)
+                        error("Number of initial GPU (`--number_gpu_start`) must be lower than the total number of"
+                              " used GPUs (`--number_gpu`)", __LINE__, __FUNCTION__, __FILE__);
+                    numberThreads = totalGpuNumber - gpuNumberStart;
+                    // Reset initial GPU to 0 (we want them all)
+                    // Logging message
+                    log("Auto-detecting all available GPUs... Detected " + std::to_string(totalGpuNumber)
+                        + " GPU(s), using " + std::to_string(numberThreads) + " of them starting at GPU "
+                        + std::to_string(gpuNumberStart) + ".", Priority::High);
+                }
+                // Security check
+                if (gpuNumberStart + numberThreads > totalGpuNumber)
+                    error("Initial GPU selected (`--number_gpu_start`) + number GPUs to use (`--number_gpu`) must"
+                          " be lower or equal than the total number of GPUs in your machine ("
+                          + std::to_string(gpuNumberStart) + " + "
+                          + std::to_string(numberThreads) + " vs. "
+                          + std::to_string(totalGpuNumber) + ").",
+                          __LINE__, __FUNCTION__, __FILE__);
             }
 
             // Proper format
             const auto writeImagesCleaned = formatAsDirectory(wrapperStructOutput.writeImages);
             const auto writeKeypointCleaned = formatAsDirectory(wrapperStructOutput.writeKeypoint);
-            const auto writeKeypointJsonCleaned = formatAsDirectory(wrapperStructOutput.writeKeypointJson);
+            const auto writeJsonCleaned = formatAsDirectory(wrapperStructOutput.writeJson);
             const auto writeHeatMapsCleaned = formatAsDirectory(wrapperStructOutput.writeHeatMaps);
             const auto modelFolder = formatAsDirectory(wrapperStructPose.modelFolder);
 
@@ -594,7 +537,7 @@ namespace op
             std::vector<std::shared_ptr<PoseExtractor>> poseExtractors;
             std::vector<std::shared_ptr<PoseGpuRenderer>> poseGpuRenderers;
             std::shared_ptr<PoseCpuRenderer> poseCpuRenderer;
-            if (gpuNumber > 0)
+            if (numberThreads > 0)
             {
                 // Get input scales and sizes
                 const auto scaleAndSizeExtractor = std::make_shared<ScaleAndSizeExtractor>(
@@ -604,7 +547,7 @@ namespace op
                 spWScaleAndSizeExtractor = std::make_shared<WScaleAndSizeExtractor<TDatumsPtr>>(scaleAndSizeExtractor);
 
                 // Input cvMat to OpenPose input & output format
-                const auto cvMatToOpInput = std::make_shared<CvMatToOpInput>();
+                const auto cvMatToOpInput = std::make_shared<CvMatToOpInput>(wrapperStructPose.poseModel);
                 spWCvMatToOpInput = std::make_shared<WCvMatToOpInput<TDatumsPtr>>(cvMatToOpInput);
                 if (renderOutput)
                 {
@@ -615,15 +558,15 @@ namespace op
                 // Pose estimators & renderers
                 std::vector<TWorker> cpuRenderers;
                 spWPoses.clear();
-                spWPoses.resize(gpuNumber);
+                spWPoses.resize(numberThreads);
                 if (wrapperStructPose.enable)
                 {
                     // Pose estimators
-                    for (auto gpuId = 0; gpuId < gpuNumber; gpuId++)
+                    for (auto gpuId = 0; gpuId < numberThreads; gpuId++)
                         poseExtractors.emplace_back(std::make_shared<PoseExtractorCaffe>(
                             wrapperStructPose.poseModel, modelFolder, gpuId + gpuNumberStart,
                             wrapperStructPose.heatMapTypes, wrapperStructPose.heatMapScale,
-                            wrapperStructPose.enableGoogleLogging
+                            wrapperStructPose.addPartCandidates, wrapperStructPose.enableGoogleLogging
                         ));
 
                     // Pose renderers
@@ -650,9 +593,10 @@ namespace op
                         // CPU rendering
                         if (wrapperStructPose.renderMode == RenderMode::Cpu)
                         {
-                            poseCpuRenderer = std::make_shared<PoseCpuRenderer>(wrapperStructPose.poseModel,
-                                                                                wrapperStructPose.renderThreshold,
-                                                                                wrapperStructPose.blendOriginalFrame);
+                            poseCpuRenderer = std::make_shared<PoseCpuRenderer>(
+                                wrapperStructPose.poseModel, wrapperStructPose.renderThreshold,
+                                wrapperStructPose.blendOriginalFrame, alphaKeypoint, alphaHeatMap,
+                                wrapperStructPose.defaultPartToRender);
                             cpuRenderers.emplace_back(std::make_shared<WPoseRenderer<TDatumsPtr>>(poseCpuRenderer));
                         }
                     }
@@ -662,6 +606,17 @@ namespace op
                     spWPoses.resize(poseExtractors.size());
                     for (auto i = 0u; i < spWPoses.size(); i++)
                         spWPoses.at(i) = {std::make_shared<WPoseExtractor<TDatumsPtr>>(poseExtractors.at(i))};
+
+                    // Added right after PoseExtractor to avoid:
+                    // 1) Rendering people that are later deleted (wrong visualization).
+                    // 2) Processing faces and hands on people that will be deleted (speed up).
+                    if (wrapperStructPose.numberPeopleMax > 0)
+                    {
+                        // Add KeepTopNPeople for each PoseExtractor
+                        const auto keepTopNPeople = std::make_shared<KeepTopNPeople>(wrapperStructPose.numberPeopleMax);
+                        for (auto& wPose : spWPoses)
+                            wPose.emplace_back(std::make_shared<WKeepTopNPeople<TDatumsPtr>>(keepTopNPeople));
+                    }
                 }
 
 
@@ -673,19 +628,19 @@ namespace op
                     if (wrapperStructPose.enable)
                     {
                         const auto faceDetector = std::make_shared<FaceDetector>(wrapperStructPose.poseModel);
-                        for (auto gpu = 0u; gpu < spWPoses.size(); gpu++)
-                            spWPoses.at(gpu).emplace_back(std::make_shared<WFaceDetector<TDatumsPtr>>(faceDetector));
+                        for (auto& wPose : spWPoses)
+                            wPose.emplace_back(std::make_shared<WFaceDetector<TDatumsPtr>>(faceDetector));
                     }
                     // OpenCV face detector
                     else
                     {
                         log("Body keypoint detection is disabled. Hence, using OpenCV face detector (much less"
                             " accurate but faster).", Priority::High);
-                        for (auto gpu = 0u; gpu < spWPoses.size(); gpu++)
+                        for (auto& wPose : spWPoses)
                         {
                             // 1 FaceDetectorOpenCV per thread, OpenCV face detector is not thread-safe
                             const auto faceDetectorOpenCV = std::make_shared<FaceDetectorOpenCV>(modelFolder);
-                            spWPoses.at(gpu).emplace_back(
+                            wPose.emplace_back(
                                 std::make_shared<WFaceDetectorOpenCV<TDatumsPtr>>(faceDetectorOpenCV)
                             );
                         }
@@ -840,6 +795,14 @@ namespace op
                         std::make_shared<WPersonIdExtractor<TDatumsPtr>>(personIdExtractor)
                     );
                 }
+                // 3-D reconstruction
+                if (wrapperStructPose.reconstruct3d)
+                {
+                    const auto poseTriangulation = std::make_shared<PoseTriangulation>(wrapperStructPose.minViews3d);
+                    mPostProcessingWs.emplace_back(
+                        std::make_shared<WPoseTriangulation<TDatumsPtr>>(poseTriangulation)
+                    );
+                }
                 // Frames processor (OpenPose format -> cv::Mat format)
                 if (renderOutput)
                 {
@@ -875,11 +838,12 @@ namespace op
                 if (wrapperStructHand.enable)
                     mOutputWs.emplace_back(std::make_shared<WHandSaver<TDatumsPtr>>(keypointSaver));
             }
-            // Write people pose data on disk (json format)
-            if (!writeKeypointJsonCleaned.empty())
+            // Write OpenPose output data on disk in json format (body/hand/face keypoints, body part locations if
+            // enabled, etc.)
+            if (!writeJsonCleaned.empty())
             {
-                const auto keypointJsonSaver = std::make_shared<KeypointJsonSaver>(writeKeypointJsonCleaned);
-                mOutputWs.emplace_back(std::make_shared<WKeypointJsonSaver<TDatumsPtr>>(keypointJsonSaver));
+                const auto peopleJsonSaver = std::make_shared<PeopleJsonSaver>(writeJsonCleaned);
+                mOutputWs.emplace_back(std::make_shared<WPeopleJsonSaver<TDatumsPtr>>(peopleJsonSaver));
             }
             // Write people pose data on disk (COCO validation json format)
             if (!wrapperStructOutput.writeCocoJson.empty())
@@ -903,8 +867,9 @@ namespace op
                 if (finalOutputSize.x <= 0 || finalOutputSize.y <= 0)
                     error("Video can only be recorded if outputSize is fixed (e.g. video, webcam, IP camera),"
                           "but not for a image directory.", __LINE__, __FUNCTION__, __FILE__);
-                const auto originalVideoFps = (wrapperStructInput.producerSharedPtr->get(CV_CAP_PROP_FPS) > 0.
-                                               ? wrapperStructInput.producerSharedPtr->get(CV_CAP_PROP_FPS) : 30.);
+                const auto originalVideoFps = (wrapperStructOutput.writeVideoFps > 0 ?
+                                                wrapperStructOutput.writeVideoFps
+                                                : wrapperStructInput.producerSharedPtr->get(CV_CAP_PROP_FPS));
                 const auto videoSaver = std::make_shared<VideoSaver>(
                     wrapperStructOutput.writeVideo, CV_FOURCC('M','J','P','G'), originalVideoFps, finalOutputSize
                 );
@@ -918,18 +883,19 @@ namespace op
                 mOutputWs.emplace_back(std::make_shared<WHeatMapSaver<TDatumsPtr>>(heatMapSaver));
             }
             // Add frame information for GUI
+            const bool guiEnabled = (wrapperStructOutput.displayMode != DisplayMode::NoDisplay);
             // If this WGuiInfoAdder instance is placed before the WImageSaver or WVideoSaver, then the resulting
             // recorded frames will look exactly as the final displayed image by the GUI
-            if (wrapperStructOutput.guiVerbose && (wrapperStructOutput.displayGui || !mUserOutputWs.empty()
+            if (wrapperStructOutput.guiVerbose && (guiEnabled || !mUserOutputWs.empty()
                                                    || mThreadManagerMode == ThreadManagerMode::Asynchronous
                                                    || mThreadManagerMode == ThreadManagerMode::AsynchronousOut))
             {
-                const auto guiInfoAdder = std::make_shared<GuiInfoAdder>(gpuNumber, wrapperStructOutput.displayGui);
+                const auto guiInfoAdder = std::make_shared<GuiInfoAdder>(numberThreads, guiEnabled);
                 mOutputWs.emplace_back(std::make_shared<WGuiInfoAdder<TDatumsPtr>>(guiInfoAdder));
             }
             // Minimal graphical user interface (GUI)
             spWGui = nullptr;
-            if (wrapperStructOutput.displayGui)
+            if (guiEnabled)
             {
                 // PoseRenderers to Renderers
                 std::vector<std::shared_ptr<Renderer>> renderers;
@@ -938,13 +904,33 @@ namespace op
                 else
                     for (const auto& poseGpuRenderer : poseGpuRenderers)
                         renderers.emplace_back(std::static_pointer_cast<Renderer>(poseGpuRenderer));
-                // Gui
-                const auto gui = std::make_shared<Gui>(
-                    finalOutputSize, wrapperStructOutput.fullScreen, mThreadManager.getIsRunningSharedPtr(),
-                    spVideoSeek, poseExtractors, renderers
-                );
-                // WGui
-                spWGui = {std::make_shared<WGui<TDatumsPtr>>(gui)};
+                // Display
+                // 3-D (+2-D) display
+                if (wrapperStructOutput.displayMode == DisplayMode::Display3D
+                    || wrapperStructOutput.displayMode == DisplayMode::DisplayAll)
+                {
+                    // Gui
+                    auto gui = std::make_shared<Gui3D>(
+                        finalOutputSize, wrapperStructOutput.fullScreen, mThreadManager.getIsRunningSharedPtr(),
+                        spVideoSeek, poseExtractors, renderers, wrapperStructPose.poseModel,
+                        wrapperStructOutput.displayMode
+                    );
+                    // WGui
+                    spWGui = {std::make_shared<WGui3D<TDatumsPtr>>(gui)};
+                }
+                // 2-D display
+                else if (wrapperStructOutput.displayMode == DisplayMode::Display2D)
+                {
+                    // Gui
+                    auto gui = std::make_shared<Gui>(
+                        finalOutputSize, wrapperStructOutput.fullScreen, mThreadManager.getIsRunningSharedPtr(),
+                        spVideoSeek, poseExtractors, renderers
+                    );
+                    // WGui
+                    spWGui = {std::make_shared<WGui<TDatumsPtr>>(gui)};
+                }
+                else
+                    error("Unknown DisplayMode.", __LINE__, __FUNCTION__, __FILE__);
             }
             // Set wrapper as configured
             mConfigured = true;
@@ -1239,7 +1225,7 @@ namespace op
                     if (spWPoses.size() > 1)
                         log("Multi-threading disabled, only 1 thread running. All GPUs have been disabled but the"
                             " first one, which is defined by gpuNumberStart (e.g. in the OpenPose demo, it is set"
-                            " with the `num_gpu_start` flag).", Priority::High);
+                            " with the `--num_gpu_start` flag).", Priority::High);
                     mThreadManager.add(mThreadId, spWPoses.at(0), queueIn, queueOut);
                 }
                 queueIn++;

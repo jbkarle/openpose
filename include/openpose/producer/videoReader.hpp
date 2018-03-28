@@ -1,6 +1,7 @@
 #ifndef OPENPOSE_PRODUCER_VIDEO_READER_HPP
 #define OPENPOSE_PRODUCER_VIDEO_READER_HPP
 
+#include <openpose/3d/cameraParameterReader.hpp>
 #include <openpose/core/common.hpp>
 #include <openpose/producer/videoCaptureReader.hpp>
 
@@ -17,25 +18,30 @@ namespace op
          * Constructor of VideoReader. It opens the video as a wrapper of cv::VideoCapture. It includes a flag to
          * indicate whether the video should be repeated once it is completely read.
          * @param videoPath const std::string parameter with the full video path location.
+         * @param imageDirectoryStereo const int parameter with the number of images per iteration (>1 would represent
+         * stereo processing).
+         * @param cameraParameterPath const std::string parameter with the folder path containing the camera
+         * parameters (only required if imageDirectorystereo > 1).
          */
-        explicit VideoReader(const std::string& videoPath);
+        explicit VideoReader(const std::string& videoPath, const unsigned int imageDirectoryStereo = 1,
+                             const std::string& cameraParameterPath = "");
 
-        std::string getFrameName();
+        std::vector<cv::Mat> getCameraMatrices();
 
-        inline double get(const int capProperty)
-        {
-            return VideoCaptureReader::get(capProperty);
-        }
+        std::string getNextFrameName();
 
-        inline void set(const int capProperty, const double value)
-        {
-            VideoCaptureReader::set(capProperty, value);
-        }
+        double get(const int capProperty);
+
+        void set(const int capProperty, const double value);
 
     private:
+        const unsigned int mImageDirectoryStereo;
         const std::string mPathName;
+        CameraParameterReader mCameraParameterReader;
 
         cv::Mat getRawFrame();
+
+        std::vector<cv::Mat> getRawFrames();
 
         DELETE_COPY(VideoReader);
     };

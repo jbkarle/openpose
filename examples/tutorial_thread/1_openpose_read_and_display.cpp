@@ -31,19 +31,27 @@ DEFINE_int32(logging_level,             3,              "The logging level. Inte
 // Producer
 DEFINE_int32(camera,                    -1,             "The camera index for cv::VideoCapture. Integer in the range [0, 9]. Select a negative"
                                                         " number (by default), to auto-detect and open the first available camera.");
-DEFINE_string(camera_resolution,        "1280x720",     "Size of the camera frames to ask for.");
-DEFINE_double(camera_fps,               30.0,           "Frame rate for the webcam (only used when saving video from webcam). Set this value to the"
-                                                        " minimum value between the OpenPose displayed speed and the webcam real frame rate.");
+DEFINE_string(camera_resolution,        "-1x-1",        "Set the camera resolution (either `--camera` or `--flir_camera`). `-1x-1` will use the"
+                                                        " default 1280x720 for `--camera`, or the maximum flir camera resolution available for"
+                                                        " `--flir_camera`");
+DEFINE_double(camera_fps,               30.0,           "Frame rate for the webcam (also used when saving video). Set this value to the minimum"
+                                                        " value between the OpenPose displayed speed and the webcam real frame rate.");
 DEFINE_string(video,                    "",             "Use a video file instead of the camera. Use `examples/media/video.avi` for our default"
                                                         " example video.");
 DEFINE_string(image_dir,                "",             "Process a directory of images. Use `examples/media/` for our default example folder with 20"
                                                         " images. Read all standard formats (jpg, png, bmp, etc.).");
+DEFINE_bool(flir_camera,                false,          "Whether to use FLIR (Point-Grey) stereo camera.");
 DEFINE_string(ip_camera,                "",             "String with the IP camera URL. It supports protocols like RTSP and HTTP.");
 DEFINE_bool(process_real_time,          false,          "Enable to keep the original source frame rate (e.g. for video). If the processing time is"
                                                         " too long, it will skip frames. If it is too fast, it will slow it down.");
+DEFINE_string(camera_parameter_folder,  "models/cameraParameters/flir/", "String with the folder where the camera parameters are located.");
 // OpenPose
 DEFINE_string(output_resolution,        "-1x-1",        "The image resolution (display and output). Use \"-1x-1\" to force the program to use the"
                                                         " input image resolution.");
+DEFINE_int32(3d_views,                  1,              "Complementary option to `--image_dir` or `--video`. OpenPose will read as many images per"
+                                                        " iteration, allowing tasks such as stereo camera processing (`--3d`). Note that"
+                                                        " `--camera_parameters_folder` must be set. OpenPose must find as many `xml` files in the"
+                                                        " parameter folder as this number indicates.");
 // Consumer
 DEFINE_bool(fullscreen,                 false,          "Run in full-screen mode (press f during runtime to toggle).");
 
@@ -62,8 +70,11 @@ int openPoseTutorialThread1()
     const auto outputSize = op::flagsToPoint(FLAGS_output_resolution, "-1x-1");
     // producerType
     const auto producerSharedPtr = op::flagsToProducer(FLAGS_image_dir, FLAGS_video, FLAGS_ip_camera, FLAGS_camera,
-                                                       FLAGS_camera_resolution, FLAGS_camera_fps);
-    const auto displayProducerFpsMode = (FLAGS_process_real_time ? op::ProducerFpsMode::OriginalFps : op::ProducerFpsMode::RetrievalFps);
+                                                       FLAGS_flir_camera, FLAGS_camera_resolution, FLAGS_camera_fps,
+                                                       FLAGS_camera_parameter_folder,
+                                                       (unsigned int) FLAGS_3d_views);
+    const auto displayProducerFpsMode = (FLAGS_process_real_time
+                                      ? op::ProducerFpsMode::OriginalFps : op::ProducerFpsMode::RetrievalFps);
     producerSharedPtr->setProducerFpsMode(displayProducerFpsMode);
     op::log("", op::Priority::Low, __LINE__, __FUNCTION__, __FILE__);
     // Step 3 - Setting producer

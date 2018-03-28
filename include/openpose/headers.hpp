@@ -1,6 +1,9 @@
 #ifndef OPENPOSE_HEADERS_HPP
 #define OPENPOSE_HEADERS_HPP
 
+// 3d module
+#include <openpose/3d/headers.hpp>
+
 // core module
 #include <openpose/core/headers.hpp>
 
@@ -18,6 +21,9 @@
 
 // hand module
 #include <openpose/hand/headers.hpp>
+
+// net module
+#include <openpose/net/headers.hpp>
 
 // pose module
 #include <openpose/pose/headers.hpp>
